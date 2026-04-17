@@ -26,14 +26,17 @@ class DBReconciler(
   )
 
   def run(): Unit = {
-    val sourceTables = sourceReader.listTables().map(_.toUpperCase()).toSet
+    val sourceTablesRaw = sourceReader.listTables().map(_.toUpperCase()).toSet
+    val nonEmptySourceTables = sourceTablesRaw.filter(sourceReader.hasData)
+    val skippedEmptySourceTables = sourceTablesRaw.diff(nonEmptySourceTables)
     val sinkTables = sinkReader.listTables().map(_.toUpperCase()).toSet
 
-    val missingInSink = sourceTables.diff(sinkTables)
-    val extraInSink = sinkTables.diff(sourceTables)
-    val commonTables = sourceTables.intersect(sinkTables).toSeq.sorted
+    val missingInSink = nonEmptySourceTables.diff(sinkTables)
+    val extraInSink = sinkTables.diff(nonEmptySourceTables)
+    val commonTables = nonEmptySourceTables.intersect(sinkTables).toSeq.sorted
 
-    println(s"Source: ${sourceTables.size} tables, Sink: ${sinkTables.size} tables")
+    println(s"Source: ${sourceTablesRaw.size} tables, Source(non-empty): ${nonEmptySourceTables.size} tables, Sink: ${sinkTables.size} tables")
+    println(s"Skipped empty source tables: ${skippedEmptySourceTables.size}")
     println(s"Common tables: ${commonTables.size}")
     println(s"Missing in Sink: ${missingInSink.size} tables")
     println(s"Extra in Sink: ${extraInSink.size} tables")
@@ -41,8 +44,8 @@ class DBReconciler(
     val catalogResults = Seq(
       TableReconResult(runId, runTime, dbConfig.name, "_CATALOG_",
         "TABLE_COUNT", if (missingInSink.isEmpty && extraInSink.isEmpty) CheckStatus.OK.toString else CheckStatus.MISMATCH.toString,
-        sourceTables.size.toString, sinkTables.size.toString,
-        s"missing_in_sink=${missingInSink.take(50).mkString(",")}|extra_in_sink=${extraInSink.take(50).mkString(",")}",
+        nonEmptySourceTables.size.toString, sinkTables.size.toString,
+        s"skipped_empty_in_source=${skippedEmptySourceTables.take(50).mkString(",")}|missing_in_sink=${missingInSink.take(50).mkString(",")}|extra_in_sink=${extraInSink.take(50).mkString(",")}",
         0L)
     )
     resultWriter.write(catalogResults)

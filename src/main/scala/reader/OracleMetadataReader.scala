@@ -114,4 +114,31 @@ class OracleMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession)
         None
     }
   }
+
+  def hasData(tableName: String): Boolean = {
+    val parts = tableName.split("\\.")
+    if (parts.length != 2) {
+      println(s"[WARN] Invalid table name format (expected OWNER.TABLE): $tableName")
+      return false
+    }
+
+    val owner = parts(0)
+    val table = parts(1)
+    val existsQuery =
+      s"""(
+         |SELECT 1
+         |FROM $owner.$table
+         |WHERE ROWNUM = 1
+         |) t""".stripMargin
+
+    Try {
+      spark.read.jdbc(config.jdbcUrl, existsQuery, jdbcProps).limit(1).count() > 0
+    } match {
+      case Success(hasRows) =>
+        hasRows
+      case Failure(e) =>
+        println(s"[ERROR] checking row existence for $tableName: ${e.getMessage}")
+        false
+    }
+  }
 }
