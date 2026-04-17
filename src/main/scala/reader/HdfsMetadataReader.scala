@@ -18,7 +18,14 @@ class HdfsMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession) {
       } else {
         val tables = fs.listStatus(basePath)
           .filter(_.isDirectory)
-          .map(_.getPath.getName.toUpperCase)
+          .flatMap { ownerStatus =>
+            val owner = ownerStatus.getPath.getName.toUpperCase
+            fs.listStatus(ownerStatus.getPath)
+              .filter(_.isDirectory)
+              .map { tableStatus =>
+                s"$owner.${tableStatus.getPath.getName.toUpperCase}"
+              }
+          }
           .toSeq
           .sorted
 
@@ -34,7 +41,14 @@ class HdfsMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession) {
   }
 
   def readTable(tableName: String): Option[DataFrame] = {
-    val path = s"${config.hdfsBasePath.stripSuffix("/")}/${tableName.toUpperCase}"
+    val parts = tableName.split("\\.")
+    if (parts.length != 2) {
+      println(s"[ERROR] Invalid table name format for HDFS path (expected OWNER.TABLE): $tableName")
+      return None
+    }
+    val owner = parts(0).toUpperCase
+    val table = parts(1).toUpperCase
+    val path = s"${config.hdfsBasePath.stripSuffix("/")}/$owner/$table"
 
     Try(spark.read.parquet(path)) match {
       case Success(df) =>

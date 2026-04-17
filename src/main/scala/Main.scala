@@ -33,14 +33,14 @@ object Main {
         jdbcUrl = "jdbc:oracle:thin:@//10.21.22",
         user = "gg_admin",
         password = "gg_oracle",
-        hdfsBasePath = "/raw_data/ERP"
+        hdfsBasePath = "/raw_data"
       ),
       DatabaseConfig(
         name = "CMIS",
         jdbcUrl = "jdbc:oracle:thin:@//10.21.22",
         user = "gg_admin",
         password = "gg_oracle",
-        hdfsBasePath = "/raw_data/CMIS"
+        hdfsBasePath = "/raw_data"
       )
     )
 
