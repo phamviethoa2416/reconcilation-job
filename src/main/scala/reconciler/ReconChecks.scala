@@ -1,6 +1,7 @@
 package reconciler
 
 import config.AppConfig
+import model.types.SchemaIssue
 import model.{RowDiffResult, SchemaFieldDiff}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{IntegerType, LongType, StructType}
@@ -27,14 +28,71 @@ object ReconChecks {
 
   private def categorizeOracle(dt: String): TypeCategory = {
     val u = dt.toUpperCase
-    if (u.contains("NUMBER") || u.contains("FLOAT") || u.contains("BINARY_FLOAT") ||
-      u.contains("BINARY_DOUBLE") || u.contains("INTEGER")) TypeCategory.Numeric
-    else if (u.contains("CHAR") || u.contains("CLOB") || u.contains("VARCHAR") ||
-      u == "LONG" || u.contains("ROWID")) TypeCategory.StringType
+    if (
+      u.contains("NUMBER") || u.contains("FLOAT") || u.contains("BINARY_FLOAT") ||
+      u.contains("BINARY_DOUBLE") || u.contains("INTEGER")
+    ) TypeCategory.Numeric
+    else if (
+      u.contains("CHAR") || u.contains("CLOB") || u.contains("VARCHAR") ||
+      u == "LONG" || u.contains("ROWID")
+    ) TypeCategory.StringType
     else if (u.contains("DATE") || u.contains("TIMESTAMP") || u.contains("INTERVAL")) TypeCategory.DateType
     else if (u.contains("BLOB") || u.contains("RAW") || u.contains("BFILE")) TypeCategory.Binary
     else TypeCategory.Other
   }
+
+  private def categorizeMySQL(dt: String): TypeCategory = {
+    val u = dt.toUpperCase
+    if (
+      u.contains("DECIMAL") || u.contains("NUMERIC") || u.contains("FLOAT") ||
+      u.contains("DOUBLE") || u.contains("REAL") || u.contains("INT") ||
+      u.contains("YEAR")
+    ) TypeCategory.Numeric
+    else if (
+      u.contains("CHAR") || u.contains("TEXT") || u.contains("ENUM") ||
+      u.contains("SET") || u.contains("JSON")
+    ) TypeCategory.StringType
+    else if (
+      u.contains("DATE") || u.contains("TIME") || u.contains("DATETIME") ||
+      u.contains("TIMESTAMP")
+    ) TypeCategory.DateType
+    else if (u.contains("BLOB") || u.contains("BINARY") || u.contains("VARBINARY")) TypeCategory.Binary
+    else if (u.contains("BOOLEAN") || u == "BOOL" || u.startsWith("BIT(1)")) TypeCategory.Boolean
+    else TypeCategory.Other
+  }
+
+  private def categorizeMSSQL(dt: String): TypeCategory = {
+    val u = dt.toUpperCase
+    if (
+      u.contains("BIGINT") || u.contains("INT") || u.contains("SMALLINT") ||
+      u.contains("TINYINT") || u.contains("DECIMAL") || u.contains("NUMERIC") ||
+      u.contains("MONEY") || u.contains("SMALLMONEY") || u.contains("FLOAT") ||
+      u.contains("REAL")
+    ) TypeCategory.Numeric
+    else if (
+      u.contains("CHAR") || u.contains("TEXT") || u.contains("XML") ||
+      u.contains("UNIQUEIDENTIFIER")
+    ) TypeCategory.StringType
+    else if (
+      u.contains("DATE") || u.contains("TIME") || u.contains("DATETIME") ||
+      u.contains("SMALLDATETIME")
+    ) TypeCategory.DateType
+    else if (
+      u == "TIMESTAMP" || u.contains("BINARY") || u.contains("VARBINARY") ||
+      u.contains("IMAGE") || u.contains("ROWVERSION")
+    ) TypeCategory.Binary
+    else if (u == "BIT") TypeCategory.Boolean
+    else TypeCategory.Other
+  }
+
+  private def categorizeSource(dbType: String, dt: String): TypeCategory =
+    dbType.toLowerCase.trim match {
+      case "oracle" => categorizeOracle(dt)
+      case "mysql"  => categorizeMySQL(dt)
+      case "mssql"  => categorizeMSSQL(dt)
+      case other =>
+        throw new IllegalArgumentException(s"Unsupported sourceDbType for schema check: $other")
+    }
 
   private def categorizeSpark(dt: String): TypeCategory = {
     val l = dt.toLowerCase
@@ -50,34 +108,35 @@ object ReconChecks {
 
   def checkSchema(
                    tableName: String,
-                   oracleSchema: Map[String, String],
+                   sourceType: String,
+                   sourceSchema: Map[String, String],
                    sparkSchema: StructType
                  ): Seq[SchemaFieldDiff] = {
 
-    val oracleFields: Map[String, String] =
-      oracleSchema.map { case (k, v) => k.toUpperCase -> v.toUpperCase }
+    val sourceFields: Map[String, String] =
+      sourceSchema.map { case (k, v) => k.toUpperCase -> v.toUpperCase }
 
     val sinkFields: Map[String, String] =
       sparkSchema.fields.map { f =>
         f.name.toUpperCase -> f.dataType.simpleString.toLowerCase
       }.toMap
 
-    val allFields = (oracleFields.keySet ++ sinkFields.keySet).toSeq.sorted
+    val allFields = (sourceFields.keySet ++ sinkFields.keySet).toSeq.sorted
 
     allFields.flatMap { f =>
-      (oracleFields.get(f), sinkFields.get(f)) match {
+      (sourceFields.get(f), sinkFields.get(f)) match {
         case (None, _) =>
-          Some(SchemaFieldDiff(f, "MISSING_IN_SOURCE"))
+          Some(SchemaFieldDiff(f, SchemaIssue.MISSING_IN_SOURCE))
 
         case (_, None) =>
-          Some(SchemaFieldDiff(f, "MISSING_IN_SINK"))
+          Some(SchemaFieldDiff(f, SchemaIssue.MISSING_IN_SINK))
 
-        case (Some(oraType), Some(spkType)) =>
-          val oraCategory = categorizeOracle(oraType)
+        case (Some(srcType), Some(spkType)) =>
+          val sourceCategory = categorizeSource(sourceType, srcType)
           val spkCategory = categorizeSpark(spkType)
 
-          if (oraCategory != spkCategory)
-            Some(SchemaFieldDiff(f, s"TYPE_MISMATCH:oracle=$oraType|spark=$spkType"))
+          if (sourceCategory != spkCategory)
+            Some(SchemaFieldDiff(f, SchemaIssue.MISMATCH))
           else
             None
       }
@@ -167,7 +226,7 @@ object ReconChecks {
       val countMismatchCount =
         joined.filter(col("src_count") > 0L && col("sink_count") > 0L).count()
 
-      val (srcSample, snkSample): (Array[Row], Array[Row]) =
+      val (srcSample, snkSample): (Seq[String], Seq[String]) =
         if (sampleSize == 0) {
           (Array.empty, Array.empty)
         } else {
@@ -186,7 +245,7 @@ object ReconChecks {
             .limit(sampleSize)
             .collect()
 
-          (srcRows, sinkRows)
+          (srcRows.map(_.mkString("|")).toSeq, sinkRows.map(_.mkString("|")).toSeq)
         }
 
       RowDiffResult(

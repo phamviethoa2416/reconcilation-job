@@ -1,9 +1,10 @@
 package reconciler
 
 import config.{AppConfig, DatabaseConfig}
-import model.{CheckStatus, TableReconResult}
+import model.TableReconResult
+import model.types.CheckStatus
 import org.apache.spark.sql.SparkSession
-import reader.{HdfsMetadataReader, OracleMetadataReader}
+import reader._
 import utils.CheckpointManager
 import writer.ResultWriter
 
@@ -19,7 +20,14 @@ class DBReconciler(
                     checkpointMgr: CheckpointManager,
                     resultWriter: ResultWriter
                   )(implicit spark: SparkSession) {
-  private val sourceReader = new OracleMetadataReader(dbConfig)
+  private val sourceReader: JdbcMetadataReader = dbConfig.dbType.toLowerCase match {
+    case "oracle" => new OracleMetadataReader(dbConfig)
+    case "mysql"  => new MySQLMetadataReader(dbConfig)
+    case "mssql"  => new MSSQLMetadataReader(dbConfig)
+    case other =>
+      throw new IllegalArgumentException(s"Unsupported dbType: $other")
+  }
+
   private val sinkReader = new HdfsMetadataReader(dbConfig)
   private val tableReconciler = new TableReconciler(
     dbConfig, sourceReader, sinkReader, runId, runTime
