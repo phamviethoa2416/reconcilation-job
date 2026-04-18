@@ -13,7 +13,7 @@ class OracleMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession)
     props.put("user", config.user)
     props.put("password", config.password)
     props.put("driver", "oracle.jdbc.OracleDriver")
-    props.put("oracle.jdbc.fetchSize", AppConfig.JDBC_FETCH_SIZE.toString)
+    props.put("fetchsize", AppConfig.JDBC_FETCH_SIZE.toString)
 
     props
   }
@@ -100,7 +100,7 @@ class OracleMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession)
       spark.read
         .format("jdbc")
         .option("url", config.jdbcUrl)
-        .option("dbtable", s"(SELECT * FROM ${tableName})")
+        .option("dbtable", s"(SELECT * FROM $tableName) t")
         .option("user", config.user)
         .option("password", config.password)
         .option("driver", "oracle.jdbc.OracleDriver")

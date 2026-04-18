@@ -7,9 +7,11 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import scala.util.{Failure, Success, Try}
 
 class HdfsMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession) {
+
+  private val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
+
   def listTables(): Seq[String] = {
     Try {
-      val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
       val basePath = new Path(config.hdfsBasePath)
 
       if (!fs.exists(basePath)) {
@@ -17,11 +19,11 @@ class HdfsMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession) {
         Seq.empty[String]
       } else {
         val tables = fs.listStatus(basePath)
-          .filter(_.isDirectory)
+          .filter(s => s.isDirectory && !s.getPath.getName.startsWith("_"))
           .flatMap { ownerStatus =>
             val owner = ownerStatus.getPath.getName.toUpperCase
             fs.listStatus(ownerStatus.getPath)
-              .filter(_.isDirectory)
+              .filter(s => s.isDirectory && !s.getPath.getName.startsWith("_"))
               .map { tableStatus =>
                 s"$owner.${tableStatus.getPath.getName.toUpperCase}"
               }
@@ -43,12 +45,17 @@ class HdfsMetadataReader(config: DatabaseConfig)(implicit spark: SparkSession) {
   def readTable(tableName: String): Option[DataFrame] = {
     val parts = tableName.split("\\.")
     if (parts.length != 2) {
-      println(s"[ERROR] Invalid table name format for HDFS path (expected OWNER.TABLE): $tableName")
+      println(s"[ERROR] Invalid table name format for HDFS path: $tableName")
       return None
     }
     val owner = parts(0).toUpperCase
     val table = parts(1).toUpperCase
     val path = s"${config.hdfsBasePath.stripSuffix("/")}/$owner/$table"
+
+    if (!fs.exists(new Path(path))) {
+      println(s"[WARN] HDFS path not found: $path")
+      return None
+    }
 
     Try(spark.read.parquet(path)) match {
       case Success(df) =>
