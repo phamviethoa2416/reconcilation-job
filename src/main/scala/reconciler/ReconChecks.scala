@@ -188,7 +188,7 @@ object ReconChecks {
     require(sampleSize >= 0, s"sampleSize must be non-negative, got $sampleSize")
 
     if (diffBuckets.isEmpty) {
-      return RowDiffResult(0L, 0L, 0L, Array.empty, Array.empty)
+      return RowDiffResult(0L, 0L, 0L, Seq.empty[String], Seq.empty[String])
     }
 
     val bucketArr = diffBuckets.toArray
@@ -228,7 +228,7 @@ object ReconChecks {
 
       val (srcSample, snkSample): (Seq[String], Seq[String]) =
         if (sampleSize == 0) {
-          (Array.empty, Array.empty)
+          (Seq.empty[String], Seq.empty[String])
         } else {
           val onlySrcHashes = joined.filter(col("sink_count") === 0L).select("row_hash")
           val onlySinkHashes = joined.filter(col("src_count") === 0L).select("row_hash")
